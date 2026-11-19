@@ -7,26 +7,41 @@ class PrimaryButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool fullWidth;
 
+  /// Показує індикатор завантаження й блокує повторні натискання.
+  final bool isLoading;
+
   const PrimaryButton({
     super.key,
     required this.label,
     required this.onPressed,
     this.fullWidth = true,
+    this.isLoading = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final button = ElevatedButton(
-      onPressed: onPressed,
+      onPressed: isLoading ? null : onPressed,
       style: ElevatedButton.styleFrom(
         backgroundColor: AppColors.accent,
+        disabledBackgroundColor: AppColors.accent.withValues(alpha: 0.5),
+        disabledForegroundColor: const Color(0xFF1A1208),
         foregroundColor: const Color(0xFF1A1208),
         elevation: 0,
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
         textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
       ),
-      child: Text(label),
+      child: isLoading
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Color(0xFF1A1208),
+              ),
+            )
+          : Text(label),
     );
     return fullWidth ? SizedBox(width: double.infinity, child: button) : button;
   }

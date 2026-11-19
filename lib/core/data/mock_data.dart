@@ -4,9 +4,6 @@ import '../models/product.dart';
 class MockData {
   MockData._();
 
-  static const String userName = 'vladyslav.andreiev.pz.2024';
-  static const String userEmail = 'vladyslav.andreiev.pz.2024@lpnu.ua';
-
   static List<Product> products() => [
         _p('1', 'Гречка', ProductCategory.grains, 'Позиція 1', 2.5, 'кг', 2025, 9, 13),
         _p('2', 'Паприка', ProductCategory.spices, 'Позиція 4', 40, 'г', 2025, 9, 30),

@@ -43,6 +43,13 @@ class AppTheme {
         focusedBorder: border.copyWith(
           borderSide: const BorderSide(color: AppColors.accent),
         ),
+        errorBorder: border.copyWith(
+          borderSide: const BorderSide(color: AppColors.danger),
+        ),
+        focusedErrorBorder: border.copyWith(
+          borderSide: const BorderSide(color: AppColors.danger),
+        ),
+        errorStyle: const TextStyle(fontSize: 10, color: AppColors.danger),
       ),
       snackBarTheme: const SnackBarThemeData(
         backgroundColor: AppColors.surface,

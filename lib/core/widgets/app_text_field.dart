@@ -32,7 +32,9 @@ class FieldLabel extends StatelessWidget {
   }
 }
 
-/// Стилізоване текстове поле з підписом.
+/// Стилізоване поле з підписом. Побудоване на [TextFormField], тому працює
+/// всередині [Form] (validator, autovalidateMode); поза Form поводиться як
+/// звичайне текстове поле.
 class AppTextField extends StatelessWidget {
   final String label;
   final String? hint;
@@ -43,7 +45,13 @@ class AppTextField extends StatelessWidget {
   final ValueChanged<String>? onChanged;
   final VoidCallback? onTap;
   final bool readOnly;
+  final bool enabled;
   final Widget? suffixIcon;
+  final FormFieldValidator<String>? validator;
+  final AutovalidateMode? autovalidateMode;
+  final TextInputAction? textInputAction;
+  final ValueChanged<String>? onFieldSubmitted;
+  final Iterable<String>? autofillHints;
 
   const AppTextField({
     super.key,
@@ -56,7 +64,13 @@ class AppTextField extends StatelessWidget {
     this.onChanged,
     this.onTap,
     this.readOnly = false,
+    this.enabled = true,
     this.suffixIcon,
+    this.validator,
+    this.autovalidateMode,
+    this.textInputAction,
+    this.onFieldSubmitted,
+    this.autofillHints,
   });
 
   @override
@@ -65,13 +79,19 @@ class AppTextField extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         FieldLabel(label, trailing: trailingLabel),
-        TextField(
+        TextFormField(
           controller: controller,
           obscureText: obscureText,
           keyboardType: keyboardType,
           onChanged: onChanged,
           onTap: onTap,
           readOnly: readOnly,
+          enabled: enabled,
+          validator: validator,
+          autovalidateMode: autovalidateMode,
+          textInputAction: textInputAction,
+          onFieldSubmitted: onFieldSubmitted,
+          autofillHints: autofillHints,
           style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(hintText: hint, suffixIcon: suffixIcon),
         ),

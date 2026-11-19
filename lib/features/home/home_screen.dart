@@ -1,8 +1,10 @@
 import 'dart:math' as math;
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/data/mock_data.dart';
+import '../../core/services/analytics_service.dart';
 import '../../core/models/product.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
@@ -12,6 +14,7 @@ import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/category_chip.dart';
 import '../../core/widgets/product_row.dart';
 import '../../core/widgets/stat_card.dart';
+import '../auth/data/auth_repository.dart';
 import '../profile/profile_screen.dart';
 import 'product_form.dart';
 
@@ -42,6 +45,21 @@ class _HomeScreenState extends State<HomeScreen> {
   SortMode _sort = SortMode.expiry;
   _Mode _mode = _Mode.list;
   Product? _editing;
+
+  @override
+  void initState() {
+    super.initState();
+    AnalyticsService.instance.logScreen('home');
+  }
+
+  /// Ім'я для привітання: displayName → частина пошти → «користувач».
+  String _greetingName(User? user) {
+    final name = user?.displayName?.trim();
+    if (name != null && name.isNotEmpty) return name;
+    final email = user?.email;
+    if (email != null && email.contains('@')) return email.split('@').first;
+    return 'користувач';
+  }
 
   // ---------- похідні дані ----------
   List<Product> get _visible {
@@ -119,6 +137,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (confirmed != true || !mounted) return;
 
     setState(() => _products.removeWhere((x) => x.id == p.id));
+    AnalyticsService.instance
+        .logEvent('product_deleted', {'category': p.category.name});
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('«${p.name}» видалено')),
     );
@@ -131,6 +151,8 @@ class _HomeScreenState extends State<HomeScreen> {
         if (i != -1) _products[i] = p;
       } else {
         _products.add(p);
+        AnalyticsService.instance
+            .logEvent('product_added', {'category': p.category.name});
       }
       _mode = _Mode.list;
       _editing = null;
@@ -190,14 +212,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w500),
               ),
               const SizedBox(height: 4),
-              Text(
-                'ВІТАЄМО, ${MockData.userName.toUpperCase()} · '
-                '${_products.length} ПОЗИЦІЙ',
-                overflow: TextOverflow.ellipsis,
-                style: AppTheme.mono.copyWith(
-                  fontSize: 9,
-                  letterSpacing: 1,
-                  color: AppColors.dim,
+              StreamBuilder<User?>(
+                stream: AuthRepository.instance.userChanges(),
+                initialData: AuthRepository.instance.currentUser,
+                builder: (context, snapshot) => Text(
+                  'ВІТАЄМО, ${_greetingName(snapshot.data).toUpperCase()} · '
+                  '${_products.length} ПОЗИЦІЙ',
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.mono.copyWith(
+                    fontSize: 9,
+                    letterSpacing: 1,
+                    color: AppColors.dim,
+                  ),
                 ),
               ),
             ],

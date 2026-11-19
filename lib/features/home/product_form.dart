@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/product.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/formatters.dart';
+import '../../core/utils/validators.dart';
 import '../../core/widgets/app_buttons.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_text_field.dart';
@@ -27,6 +28,7 @@ class ProductForm extends StatefulWidget {
 }
 
 class _ProductFormState extends State<ProductForm> {
+  final _formKey = GlobalKey<FormState>();
   late final TextEditingController _name;
   late final TextEditingController _place;
   late final TextEditingController _qty;
@@ -76,14 +78,9 @@ class _ProductFormState extends State<ProductForm> {
   }
 
   void _submit() {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
     final name = _name.text.trim();
-    if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Введіть назву продукту')),
-      );
-      return;
-    }
-    final qty = double.tryParse(_qty.text.trim().replaceAll(',', '.')) ?? 1;
+    final qty = double.parse(_qty.text.trim().replaceAll(',', '.'));
     final id = widget.initial?.id ??
         DateTime.now().microsecondsSinceEpoch.toString();
 
@@ -102,7 +99,10 @@ class _ProductFormState extends State<ProductForm> {
   Widget build(BuildContext context) {
     final gap = const SizedBox(height: 14);
     return AppCard(
-      child: Column(
+      child: Form(
+        key: _formKey,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
@@ -114,6 +114,7 @@ class _ProductFormState extends State<ProductForm> {
             label: 'Назва продукту',
             hint: 'напр. Гречка',
             controller: _name,
+            validator: Validators.productName,
           ),
           gap,
           Row(
@@ -136,6 +137,7 @@ class _ProductFormState extends State<ProductForm> {
                   label: 'Місце зберігання',
                   hint: 'напр. Позиція 1',
                   controller: _place,
+                  validator: (v) => Validators.optionalMaxLength(v, 40),
                 ),
               ),
             ],
@@ -148,6 +150,7 @@ class _ProductFormState extends State<ProductForm> {
                 child: AppTextField(
                   label: 'Кількість',
                   controller: _qty,
+                  validator: Validators.positiveNumber,
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
                 ),
@@ -194,6 +197,7 @@ class _ProductFormState extends State<ProductForm> {
             ],
           ),
         ],
+      ),
       ),
     );
   }
