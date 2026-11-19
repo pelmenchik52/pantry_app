@@ -1,3 +1,5 @@
+import 'package:equatable/equatable.dart';
+
 enum ProductCategory {
   grains('Крупи та бобові', '🌾'),
   canned('Консерви', '🥫'),
@@ -20,7 +22,7 @@ const List<String> kUnits = ['кг', 'г', 'л', 'мл', 'шт', 'пак'];
 /// Скільки днів до закінчення терміну вважається статусом «Скоро».
 const int kSoonDays = 7;
 
-class Product {
+class Product extends Equatable {
   final String id;
   final String name;
   final ProductCategory category;
@@ -52,6 +54,36 @@ class Product {
     if (d < 0) return ExpiryStatus.expired;
     if (d <= kSoonDays) return ExpiryStatus.soon;
     return ExpiryStatus.ok;
+  }
+
+  @override
+  List<Object?> get props =>
+      [id, name, category, place, quantity, unit, expiry];
+
+  /// Серіалізація для локального сховища.
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'category': category.name,
+        'place': place,
+        'quantity': quantity,
+        'unit': unit,
+        'expiry': expiry.toIso8601String(),
+      };
+
+  factory Product.fromJson(Map<String, dynamic> json) {
+    return Product(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      category: ProductCategory.values.firstWhere(
+        (c) => c.name == json['category'],
+        orElse: () => ProductCategory.grains,
+      ),
+      place: json['place'] as String,
+      quantity: (json['quantity'] as num).toDouble(),
+      unit: json['unit'] as String,
+      expiry: DateTime.parse(json['expiry'] as String),
+    );
   }
 
   Product copyWith({

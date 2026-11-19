@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/services/analytics_service.dart';
 import '../../core/theme/app_colors.dart';
@@ -8,8 +9,7 @@ import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/auth_scaffold.dart';
 import '../../core/widgets/google_sign_in_button.dart';
 import '../../core/widgets/status_banner.dart';
-import 'data/auth_failure.dart';
-import 'data/auth_repository.dart';
+import 'bloc/auth_bloc.dart';
 
 /// Екран реєстрації з валідацією через Form.
 class RegisterScreen extends StatefulWidget {
@@ -25,22 +25,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
-  final _repo = AuthRepository.instance;
-
-  bool _loading = false;
-  bool _googleLoading = false;
-  String? _error;
-
-  bool get _busy => _loading || _googleLoading;
+  late final AuthBloc _authBloc;
 
   @override
   void initState() {
     super.initState();
+    _authBloc = context.read<AuthBloc>()..add(const AuthFeedbackCleared());
     AnalyticsService.instance.logScreen('register');
   }
 
   @override
   void dispose() {
+    _authBloc.add(const AuthFeedbackCleared());
     _name.dispose();
     _email.dispose();
     _password.dispose();
@@ -48,50 +44,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  Future<void> _register() async {
-    if (_busy) return;
+  // Після успішної реєстрації AuthGate сам показує головний екран
+  // і закриває цей екран (див. listener в AuthGate).
+  void _register() {
+    if (_authBloc.state.isBusy) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
-
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      await _repo.signUp(
-        email: _email.text,
-        password: _password.text,
-        displayName: _name.text,
-      );
-      await AnalyticsService.instance.logSignUp('password');
-      // Користувач уже авторизований: AuthGate показує головний екран,
-      // а цей екран (поверх нього в стеку) потрібно закрити.
-      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
-    } on AuthFailure catch (e) {
-      if (mounted) setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+    _authBloc.add(AuthSignUpRequested(
+      name: _name.text,
+      email: _email.text,
+      password: _password.text,
+    ));
   }
 
-  Future<void> _registerWithGoogle() async {
-    if (_busy) return;
-    setState(() {
-      _googleLoading = true;
-      _error = null;
-    });
-    try {
-      await _repo.signInWithGoogle();
-      await AnalyticsService.instance.logSignUp('google');
-      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
-    } on AuthFailure catch (e) {
-      if (mounted && !e.cancelled) setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _googleLoading = false);
-    }
+  void _registerWithGoogle() {
+    if (_authBloc.state.isBusy) return;
+    _authBloc.add(const AuthGoogleSignInRequested(isSignUp: true));
   }
 
   @override
   Widget build(BuildContext context) {
+    return BlocBuilder<AuthBloc, AuthState>(
+      builder: (context, auth) => _buildForm(context, auth),
+    );
+  }
+
+  Widget _buildForm(BuildContext context, AuthState auth) {
+    final busy = auth.isBusy;
     return AuthScaffold(
       subtitle: 'новий акаунт',
       child: Form(
@@ -103,8 +81,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
             const Text('Реєстрація',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
             const SizedBox(height: 18),
-            if (_error != null) ...[
-              StatusBanner(_error!),
+            if (auth.error != null) ...[
+              StatusBanner(auth.error!),
               const SizedBox(height: 14),
             ],
             AppTextField(
@@ -113,7 +91,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               controller: _name,
               textInputAction: TextInputAction.next,
               autofillHints: const [AutofillHints.name],
-              enabled: !_busy,
+              enabled: !busy,
               validator: Validators.name,
             ),
             const SizedBox(height: 14),
@@ -124,7 +102,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               keyboardType: TextInputType.emailAddress,
               textInputAction: TextInputAction.next,
               autofillHints: const [AutofillHints.email],
-              enabled: !_busy,
+              enabled: !busy,
               validator: Validators.email,
             ),
             const SizedBox(height: 14),
@@ -134,7 +112,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               controller: _password,
               obscureText: true,
               textInputAction: TextInputAction.next,
-              enabled: !_busy,
+              enabled: !busy,
               validator: Validators.newPassword,
             ),
             const SizedBox(height: 14),
@@ -144,23 +122,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
               controller: _confirm,
               obscureText: true,
               textInputAction: TextInputAction.done,
-              enabled: !_busy,
+              enabled: !busy,
               validator: Validators.confirmPassword(() => _password.text),
               onFieldSubmitted: (_) => _register(),
             ),
             const SizedBox(height: 18),
             PrimaryButton(
               label: 'Створити акаунт',
-              isLoading: _loading,
-              onPressed: _busy ? null : _register,
+              isLoading: auth.operation == AuthOperation.signUp,
+              onPressed: busy ? null : _register,
             ),
             const SizedBox(height: 14),
             const OrDivider(),
             const SizedBox(height: 14),
             GoogleSignInButton(
               label: 'Зареєструватись через Google',
-              isLoading: _googleLoading,
-              onPressed: _busy ? null : _registerWithGoogle,
+              isLoading: auth.operation == AuthOperation.google,
+              onPressed: busy ? null : _registerWithGoogle,
             ),
             const SizedBox(height: 16),
             Center(

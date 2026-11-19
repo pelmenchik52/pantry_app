@@ -1,36 +1,25 @@
-import 'dart:math' as math;
-
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../core/data/mock_data.dart';
 import '../../core/services/analytics_service.dart';
 import '../../core/models/product.dart';
+import '../../core/models/sort_mode.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/utils/formatters.dart';
 import '../../core/widgets/app_buttons.dart';
-import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/category_chip.dart';
 import '../../core/widgets/product_row.dart';
 import '../../core/widgets/stat_card.dart';
-import '../auth/data/auth_repository.dart';
+import '../auth/bloc/auth_bloc.dart';
 import '../profile/profile_screen.dart';
+import 'bloc/products_bloc.dart';
 import 'product_form.dart';
-
-enum SortMode {
-  expiry('За терміном'),
-  name('За назвою'),
-  category('За категорією');
-
-  const SortMode(this.label);
-  final String label;
-}
 
 enum _Mode { list, add, edit }
 
 /// Головний екран: статистика, пошук, фільтри та список продуктів.
-/// Дані — захардкоджені (MockData), без бекенду.
+/// Дані й фільтри беруться зі стану [ProductsBloc]; у самому віджеті
+/// лишається лише стан інтерфейсу (відкрита форма).
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -39,10 +28,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final List<Product> _products = MockData.products();
-  String _query = '';
-  ProductCategory? _category;
-  SortMode _sort = SortMode.expiry;
+  final _search = TextEditingController();
   _Mode _mode = _Mode.list;
   Product? _editing;
 
@@ -52,55 +38,16 @@ class _HomeScreenState extends State<HomeScreen> {
     AnalyticsService.instance.logScreen('home');
   }
 
-  /// Ім'я для привітання: displayName → частина пошти → «користувач».
-  String _greetingName(User? user) {
-    final name = user?.displayName?.trim();
-    if (name != null && name.isNotEmpty) return name;
-    final email = user?.email;
-    if (email != null && email.contains('@')) return email.split('@').first;
-    return 'користувач';
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
   }
 
-  // ---------- похідні дані ----------
-  List<Product> get _visible {
-    final q = _query.toLowerCase().trim();
-    final list = _products.where((p) {
-      final matchCat = _category == null || p.category == _category;
-      final matchQuery = q.isEmpty ||
-          p.name.toLowerCase().contains(q) ||
-          p.place.toLowerCase().contains(q);
-      return matchCat && matchQuery;
-    }).toList();
+  // ---------- дії (кожна просто надсилає подію в BLoC) ----------
+  ProductsBloc get _bloc => context.read<ProductsBloc>();
 
-    switch (_sort) {
-      case SortMode.expiry:
-        list.sort((a, b) => a.expiry.compareTo(b.expiry));
-      case SortMode.name:
-        list.sort((a, b) => a.name.compareTo(b.name));
-      case SortMode.category:
-        list.sort((a, b) => a.category.label.compareTo(b.category.label));
-    }
-    return list;
-  }
-
-  int _count(ExpiryStatus s) => _products.where((p) => p.status == s).length;
-
-  // ---------- дії ----------
-  void _changeQty(Product p, int dir) {
-    final step = quantityStep(p.unit);
-    final next = math.max(0, p.quantity + dir * step);
-    final rounded = double.parse(next.toStringAsFixed(2));
-    _replace(p.copyWith(quantity: rounded));
-  }
-
-  void _replace(Product updated) {
-    setState(() {
-      final i = _products.indexWhere((p) => p.id == updated.id);
-      if (i != -1) _products[i] = updated;
-    });
-  }
-
-    Future<void> _delete(Product p) async {
+  Future<void> _delete(Product p) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -136,24 +83,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirmed != true || !mounted) return;
 
-    setState(() => _products.removeWhere((x) => x.id == p.id));
-    AnalyticsService.instance
-        .logEvent('product_deleted', {'category': p.category.name});
+    _bloc.add(ProductDeleted(p.id));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('«${p.name}» видалено')),
     );
   }
 
   void _submitForm(Product p) {
+    _bloc.add(_mode == _Mode.edit ? ProductUpdated(p) : ProductAdded(p));
     setState(() {
-      if (_mode == _Mode.edit) {
-        final i = _products.indexWhere((x) => x.id == p.id);
-        if (i != -1) _products[i] = p;
-      } else {
-        _products.add(p);
-        AnalyticsService.instance
-            .logEvent('product_added', {'category': p.category.name});
-      }
       _mode = _Mode.list;
       _editing = null;
     });
@@ -167,6 +105,19 @@ class _HomeScreenState extends State<HomeScreen> {
   // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
+    // Помилки збереження (з відкотом списку) показуємо snackbar-ом.
+    return BlocListener<ProductsBloc, ProductsState>(
+      listenWhen: (prev, curr) =>
+          curr.error != null &&
+          prev.error != curr.error &&
+          curr.status != ProductsStatus.failure,
+      listener: (context, state) => ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(state.error!))),
+      child: _buildScaffold(),
+    );
+  }
+
+  Widget _buildScaffold() {
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -182,7 +133,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   _buildStats(),
                   const SizedBox(height: 16),
                   if (_mode == _Mode.list)
-                    ..._buildListSection()
+                    _buildListSection()
                   else
                     ProductForm(
                       key: ValueKey(_editing?.id ?? 'new'),
@@ -212,17 +163,22 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w500),
               ),
               const SizedBox(height: 4),
-              StreamBuilder<User?>(
-                stream: AuthRepository.instance.userChanges(),
-                initialData: AuthRepository.instance.currentUser,
-                builder: (context, snapshot) => Text(
-                  'ВІТАЄМО, ${_greetingName(snapshot.data).toUpperCase()} · '
-                  '${_products.length} ПОЗИЦІЙ',
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTheme.mono.copyWith(
-                    fontSize: 9,
-                    letterSpacing: 1,
-                    color: AppColors.dim,
+              BlocBuilder<AuthBloc, AuthState>(
+                buildWhen: (prev, curr) => prev.user != curr.user,
+                builder: (context, auth) =>
+                    BlocBuilder<ProductsBloc, ProductsState>(
+                  buildWhen: (prev, curr) =>
+                      prev.products.length != curr.products.length,
+                  builder: (context, state) => Text(
+                    'ВІТАЄМО, '
+                    '${(auth.user?.greetingName ?? 'користувач').toUpperCase()}'
+                    ' · ${state.products.length} ПОЗИЦІЙ',
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTheme.mono.copyWith(
+                      fontSize: 9,
+                      letterSpacing: 1,
+                      color: AppColors.dim,
+                    ),
                   ),
                 ),
               ),
@@ -252,144 +208,197 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildStats() {
     const gap = SizedBox(width: 10);
-    return Row(
-      children: [
-        Expanded(child: StatCard(value: _products.length, label: 'Всього')),
-        gap,
-        Expanded(
-          child: StatCard(
-              value: _count(ExpiryStatus.ok),
-              label: 'Норма',
-              color: AppColors.ok),
-        ),
-        gap,
-        Expanded(
-          child: StatCard(
-              value: _count(ExpiryStatus.soon),
-              label: 'Скоро',
-              color: AppColors.warn),
-        ),
-        gap,
-        Expanded(
-          child: StatCard(
-              value: _count(ExpiryStatus.expired),
-              label: 'Прострочені',
-              color: AppColors.danger),
-        ),
-      ],
+    return BlocBuilder<ProductsBloc, ProductsState>(
+      buildWhen: (prev, curr) => prev.products != curr.products,
+      builder: (context, state) => Row(
+        children: [
+          Expanded(
+              child: StatCard(value: state.products.length, label: 'Всього')),
+          gap,
+          Expanded(
+            child: StatCard(
+                value: state.count(ExpiryStatus.ok),
+                label: 'Норма',
+                color: AppColors.ok),
+          ),
+          gap,
+          Expanded(
+            child: StatCard(
+                value: state.count(ExpiryStatus.soon),
+                label: 'Скоро',
+                color: AppColors.warn),
+          ),
+          gap,
+          Expanded(
+            child: StatCard(
+                value: state.count(ExpiryStatus.expired),
+                label: 'Прострочені',
+                color: AppColors.danger),
+          ),
+        ],
+      ),
     );
   }
 
-  List<Widget> _buildListSection() {
-    final items = _visible;
-    return [
-      Row(
-        children: [
-          Expanded(
-            child: TextField(
-              onChanged: (v) => setState(() => _query = v),
-              style: const TextStyle(fontSize: 13),
-              decoration: const InputDecoration(
-                hintText: 'Пошук за назвою або місцем...',
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              ),
+  Widget _buildListSection() {
+    return BlocBuilder<ProductsBloc, ProductsState>(
+      builder: (context, state) {
+        switch (state.status) {
+          case ProductsStatus.initial:
+          case ProductsStatus.loading:
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 60),
+              child: Center(child: CircularProgressIndicator()),
+            );
+          case ProductsStatus.failure:
+            return _buildLoadError(state);
+          case ProductsStatus.success:
+            return _buildLoaded(state);
+        }
+      },
+    );
+  }
+
+  Widget _buildLoadError(ProductsState state) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Center(
+        child: Column(
+          children: [
+            Text(
+              state.error ?? 'Сталася помилка.',
+              style: const TextStyle(fontSize: 12, color: AppColors.muted),
             ),
-          ),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 150,
-            child: InputDecorator(
-              decoration: const InputDecoration(
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<SortMode>(
-                  isExpanded: true,
-                  isDense: true,
-                  value: _sort,
-                  dropdownColor: AppColors.surface,
-                  style: const TextStyle(fontSize: 12, color: AppColors.text),
-                  icon: const Icon(Icons.keyboard_arrow_down,
-                      size: 18, color: AppColors.muted),
-                  items: [
-                    for (final s in SortMode.values)
-                      DropdownMenuItem(value: s, child: Text(s.label)),
-                  ],
-                  onChanged: (v) => setState(() => _sort = v ?? _sort),
+            const SizedBox(height: 14),
+            OutlineAppButton(
+              label: 'Спробувати ще раз',
+              onPressed: () => _bloc.add(const ProductsLoadRequested()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoaded(ProductsState state) {
+    final items = state.visibleProducts;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _search,
+                onChanged: (v) => _bloc.add(ProductsQueryChanged(v)),
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  hintText: 'Пошук за назвою або місцем...',
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                 ),
               ),
             ),
-          ),
-        ],
-      ),
-      const SizedBox(height: 12),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          CategoryChip(
-            label: 'Всі',
-            selected: _category == null,
-            onTap: () => setState(() => _category = null),
-          ),
-          for (final c in ProductCategory.values)
-            CategoryChip(
-              label: '${c.emoji} ${c.label}',
-              selected: _category == c,
-              onTap: () => setState(() => _category = c),
-            ),
-        ],
-      ),
-      const SizedBox(height: 14),
-      LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 760;
-          return Container(
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.border),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Column(
-              children: [
-                if (wide) const ProductTableHeader(),
-                if (items.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(28),
-                    child: Text(
-                      'Нічого не знайдено. Змініть запит або фільтр.',
-                      style: TextStyle(fontSize: 12, color: AppColors.muted),
-                    ),
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 150,
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<SortMode>(
+                    isExpanded: true,
+                    isDense: true,
+                    value: state.sort,
+                    dropdownColor: AppColors.surface,
+                    style:
+                        const TextStyle(fontSize: 12, color: AppColors.text),
+                    icon: const Icon(Icons.keyboard_arrow_down,
+                        size: 18, color: AppColors.muted),
+                    items: [
+                      for (final s in SortMode.values)
+                        DropdownMenuItem(value: s, child: Text(s.label)),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) _bloc.add(ProductsSortChanged(v));
+                    },
                   ),
-                for (final p in items)
-                  ProductRow(
-                    key: ValueKey(p.id),
-                    product: p,
-                    wide: wide,
-                    onDecrement: () => _changeQty(p, -1),
-                    onIncrement: () => _changeQty(p, 1),
-                    onEdit: () => setState(() {
-                      _editing = p;
-                      _mode = _Mode.edit;
-                    }),
-                    onDelete: () => _delete(p),
-                  ),
-              ],
+                ),
+              ),
             ),
-          );
-        },
-      ),
-      const SizedBox(height: 10),
-      Align(
-        alignment: Alignment.centerRight,
-        child: Text(
-          '${items.length} з ${_products.length} позицій',
-          style: AppTheme.mono.copyWith(fontSize: 10, color: AppColors.dim),
+          ],
         ),
-      ),
-    ];
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            CategoryChip(
+              label: 'Всі',
+              selected: state.category == null,
+              onTap: () => _bloc.add(const ProductsCategoryChanged(null)),
+            ),
+            for (final c in ProductCategory.values)
+              CategoryChip(
+                label: '${c.emoji} ${c.label}',
+                selected: state.category == c,
+                onTap: () => _bloc.add(ProductsCategoryChanged(c)),
+              ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 760;
+            return Container(
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.border),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  if (wide) const ProductTableHeader(),
+                  if (items.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(28),
+                      child: Text(
+                        'Нічого не знайдено. Змініть запит або фільтр.',
+                        style: TextStyle(fontSize: 12, color: AppColors.muted),
+                      ),
+                    ),
+                  for (final p in items)
+                    ProductRow(
+                      key: ValueKey(p.id),
+                      product: p,
+                      wide: wide,
+                      onDecrement: () =>
+                          _bloc.add(ProductQuantityChanged(p.id, -1)),
+                      onIncrement: () =>
+                          _bloc.add(ProductQuantityChanged(p.id, 1)),
+                      onEdit: () => setState(() {
+                        _editing = p;
+                        _mode = _Mode.edit;
+                      }),
+                      onDelete: () => _delete(p),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerRight,
+          child: Text(
+            '${items.length} з ${state.products.length} позицій',
+            style: AppTheme.mono.copyWith(fontSize: 10, color: AppColors.dim),
+          ),
+        ),
+      ],
+    );
   }
 }

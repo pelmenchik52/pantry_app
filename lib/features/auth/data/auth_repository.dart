@@ -96,6 +96,9 @@ class AuthRepository {
     });
   }
 
+  /// Оновлює дані поточного користувача із сервера Firebase.
+  Future<void> reloadUser() => _guard(() => _requireUser().reload());
+
   /// Зміна пароля. Firebase вимагає свіжого входу, тому спершу
   /// перевіряємо поточний пароль (повторна автентифікація).
   Future<void> changePassword({

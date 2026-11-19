@@ -1,5 +1,5 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
 import '../../core/services/analytics_service.dart';
@@ -11,51 +11,52 @@ import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/status_banner.dart';
 import '../../core/widgets/user_avatar.dart';
-import '../auth/data/auth_failure.dart';
+import '../auth/bloc/auth_bloc.dart';
+import '../auth/data/app_user.dart';
 import '../auth/data/auth_repository.dart';
 import 'avatar_presets.dart';
+import 'bloc/profile_bloc.dart';
 
 /// Профіль користувача: фото, ім'я, способи входу, зміна пароля, вихід.
-class ProfileScreen extends StatefulWidget {
+/// Стан екрана веде [ProfileBloc], який створюється разом із маршрутом.
+class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
   @override
-  State<ProfileScreen> createState() => _ProfileScreenState();
+  Widget build(BuildContext context) {
+    return BlocProvider(
+      create: (context) => ProfileBloc(
+        authRepository: context.read<AuthRepository>(),
+      )..add(const ProfileLoadRequested()),
+      child: const _ProfileView(),
+    );
+  }
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
-  final _repo = AuthRepository.instance;
+class _ProfileView extends StatefulWidget {
+  const _ProfileView();
 
+  @override
+  State<_ProfileView> createState() => _ProfileViewState();
+}
+
+class _ProfileViewState extends State<_ProfileView> {
   final _nameKey = GlobalKey<FormState>();
   final _photoKey = GlobalKey<FormState>();
   final _passwordKey = GlobalKey<FormState>();
 
-  late final TextEditingController _name;
-  late final TextEditingController _photoUrl;
-  late final TextEditingController _email;
+  // У віджеті лишаються лише контролери полів введення;
+  // усе інше (дані, прапорці завантаження, помилки) — у ProfileBloc.
+  final _name = TextEditingController();
+  final _photoUrl = TextEditingController();
+  final _email = TextEditingController();
   final _current = TextEditingController();
   final _new = TextEditingController();
   final _confirm = TextEditingController();
 
-  bool _savingName = false;
-  bool _savingPhoto = false;
-  bool _changingPassword = false;
-  bool _linking = false;
-  bool _signingOut = false;
-
-  String? _nameError;
-  String? _photoError;
-  String? _passwordError;
-  String? _linkError;
-  bool _needRelogin = false;
-
   @override
   void initState() {
     super.initState();
-    final user = _repo.currentUser;
-    _name = TextEditingController(text: user?.displayName ?? '');
-    _photoUrl = TextEditingController(text: user?.photoURL ?? '');
-    _email = TextEditingController(text: user?.email ?? '');
     AnalyticsService.instance.logScreen('profile');
   }
 
@@ -70,111 +71,50 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.dispose();
   }
 
+  ProfileBloc get _bloc => context.read<ProfileBloc>();
+
   void _toast(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  /// Заповнює поля даними профілю, коли вони завантажені.
+  void _fillFields(AppUser? user) {
+    _name.text = user?.displayName ?? '';
+    _photoUrl.text = user?.photoUrl ?? '';
+    _email.text = user?.email ?? '';
+  }
+
   // ------------------------------------------------------------- дії -------
 
-  Future<void> _saveName() async {
-    if (_savingName) return;
+  void _saveName() {
+    if (_bloc.state.isBusy) return;
     if (!(_nameKey.currentState?.validate() ?? false)) return;
-    setState(() {
-      _savingName = true;
-      _nameError = null;
-    });
-    try {
-      await _repo.updateProfile(displayName: _name.text.trim());
-      await AnalyticsService.instance.logEvent('profile_name_updated');
-      if (mounted) _toast('Дані збережено');
-    } on AuthFailure catch (e) {
-      if (mounted) setState(() => _nameError = e.message);
-    } finally {
-      if (mounted) setState(() => _savingName = false);
-    }
+    _bloc.add(ProfileNameSubmitted(_name.text));
   }
 
-  Future<void> _savePhoto() async {
-    if (_savingPhoto) return;
+  void _savePhoto() {
+    if (_bloc.state.isBusy) return;
     if (!(_photoKey.currentState?.validate() ?? false)) return;
-    setState(() {
-      _savingPhoto = true;
-      _photoError = null;
-    });
-    try {
-      await _repo.updateProfile(photoUrl: _photoUrl.text.trim());
-      await AnalyticsService.instance.logEvent('profile_photo_updated');
-      if (mounted) _toast('Фото профілю оновлено');
-    } on AuthFailure catch (e) {
-      if (mounted) setState(() => _photoError = e.message);
-    } finally {
-      if (mounted) setState(() => _savingPhoto = false);
-    }
+    _bloc.add(ProfilePhotoSubmitted(_photoUrl.text));
   }
 
-  Future<void> _changePassword() async {
-    if (_changingPassword) return;
+  void _changePassword() {
+    if (_bloc.state.isBusy) return;
     if (!(_passwordKey.currentState?.validate() ?? false)) return;
-    setState(() {
-      _changingPassword = true;
-      _passwordError = null;
-      _needRelogin = false;
-    });
-    try {
-      await _repo.changePassword(
-        currentPassword: _current.text,
-        newPassword: _new.text,
-      );
-      await AnalyticsService.instance.logEvent('password_changed');
-      if (!mounted) return;
-      _passwordKey.currentState?.reset();
-      _current.clear();
-      _new.clear();
-      _confirm.clear();
-      _toast('Пароль змінено');
-    } on AuthFailure catch (e) {
-      if (mounted) {
-        setState(() {
-          _passwordError = e.message;
-          _needRelogin = e.requiresRecentLogin;
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _changingPassword = false);
-    }
+    _bloc.add(ProfilePasswordChangeSubmitted(
+      currentPassword: _current.text,
+      newPassword: _new.text,
+    ));
   }
 
-  Future<void> _linkGoogle() async {
-    if (_linking) return;
-    setState(() {
-      _linking = true;
-      _linkError = null;
-    });
-    try {
-      await _repo.linkGoogle();
-      await AnalyticsService.instance.logEvent('google_linked');
-      if (mounted) _toast('Google підключено до акаунту');
-    } on AuthFailure catch (e) {
-      if (mounted && !e.cancelled) setState(() => _linkError = e.message);
-    } finally {
-      if (mounted) setState(() => _linking = false);
-    }
+  void _linkGoogle() {
+    if (_bloc.state.isBusy) return;
+    _bloc.add(const ProfileGoogleLinkRequested());
   }
 
-  Future<void> _logout() async {
-    if (_signingOut) return;
-    setState(() => _signingOut = true);
-    try {
-      await AnalyticsService.instance.logEvent('logout');
-      await _repo.signOut();
-      // AuthGate покаже екран входу; прибираємо зі стеку цей екран.
-      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
-    } on AuthFailure catch (e) {
-      if (mounted) {
-        setState(() => _signingOut = false);
-        _toast(e.message);
-      }
-    }
+  /// Вихід виконує AuthBloc; AuthGate після цього сам закриває екран.
+  void _logout() {
+    context.read<AuthBloc>().add(const AuthSignOutRequested());
   }
 
   /// Навмисна помилка для перевірки Sentry (аналог Crashlytics для Web).
@@ -192,50 +132,119 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: StreamBuilder<User?>(
-              stream: _repo.userChanges(),
-              initialData: _repo.currentUser,
-              builder: (context, snapshot) {
-                final user = snapshot.data ?? _repo.currentUser;
-                return SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildTopBar(),
-                      const SizedBox(height: 14),
-                      _buildSummary(user),
-                      const SizedBox(height: 14),
-                      _buildPhotoCard(),
-                      const SizedBox(height: 14),
-                      _buildPersonalCard(),
-                      const SizedBox(height: 14),
-                      _buildProvidersCard(),
-                      const SizedBox(height: 14),
-                      _buildPasswordCard(),
-                      const SizedBox(height: 14),
-                      _buildDevCard(),
-                      const SizedBox(height: 14),
-                      OutlineAppButton(
-                        label: _signingOut ? 'Вихід…' : 'Вийти з акаунту',
-                        fullWidth: true,
-                        color: AppColors.danger,
-                        borderColor: const Color(0x66E5594F),
-                        onPressed: _signingOut ? null : _logout,
-                      ),
-                      const SizedBox(height: 20),
-                    ],
-                  ),
-                );
-              },
+    return MultiBlocListener(
+      listeners: [
+        // Профіль завантажено → заповнюємо поля.
+        BlocListener<ProfileBloc, ProfileState>(
+          listenWhen: (prev, curr) =>
+              prev.status != ProfileStatus.loaded &&
+              curr.status == ProfileStatus.loaded,
+          listener: (context, state) => _fillFields(state.profile),
+        ),
+        // Помилка виходу з акаунту → snackbar.
+        BlocListener<AuthBloc, AuthState>(
+          listenWhen: (prev, curr) =>
+              prev.operation == AuthOperation.signOut &&
+              curr.error != null &&
+              prev.error != curr.error,
+          listener: (context, state) => _toast(state.error!),
+        ),
+        // Успішна дія → snackbar (+ очищення полів пароля).
+        BlocListener<ProfileBloc, ProfileState>(
+          listenWhen: (prev, curr) => prev.messageId != curr.messageId,
+          listener: (context, state) {
+            if (state.completedOperation ==
+                ProfileOperation.changingPassword) {
+              _passwordKey.currentState?.reset();
+              _current.clear();
+              _new.clear();
+              _confirm.clear();
+            }
+            if (state.message != null) _toast(state.message!);
+          },
+        ),
+      ],
+      child: Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: BlocBuilder<ProfileBloc, ProfileState>(
+                builder: (context, state) {
+                  switch (state.status) {
+                    case ProfileStatus.initial:
+                    case ProfileStatus.loading:
+                      return const Center(child: CircularProgressIndicator());
+                    case ProfileStatus.failure:
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(state.error ?? 'Сталася помилка.',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: AppColors.muted)),
+                              const SizedBox(height: 14),
+                              OutlineAppButton(
+                                label: 'Назад',
+                                onPressed: () => Navigator.of(context).pop(),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    case ProfileStatus.loaded:
+                      return _buildContent(state);
+                  }
+                },
+              ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildContent(ProfileState state) {
+    return BlocBuilder<AuthBloc, AuthState>(
+      buildWhen: (prev, curr) => prev.operation != curr.operation,
+      builder: (context, auth) => _buildBody(
+        state,
+        signingOut: auth.operation == AuthOperation.signOut,
+      ),
+    );
+  }
+
+  Widget _buildBody(ProfileState state, {required bool signingOut}) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildTopBar(),
+          const SizedBox(height: 14),
+          _buildSummary(state.profile),
+          const SizedBox(height: 14),
+          _buildPhotoCard(state),
+          const SizedBox(height: 14),
+          _buildPersonalCard(state),
+          const SizedBox(height: 14),
+          _buildProvidersCard(state),
+          const SizedBox(height: 14),
+          _buildPasswordCard(state),
+          const SizedBox(height: 14),
+          _buildDevCard(),
+          const SizedBox(height: 14),
+          OutlineAppButton(
+            label: signingOut ? 'Вихід…' : 'Вийти з акаунту',
+            fullWidth: true,
+            color: AppColors.danger,
+            borderColor: const Color(0x66E5594F),
+            onPressed: signingOut ? null : _logout,
+          ),
+          const SizedBox(height: 20),
+        ],
       ),
     );
   }
@@ -254,14 +263,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildSummary(User? user) {
+  Widget _buildSummary(AppUser? user) {
     final name = (user?.displayName?.trim().isNotEmpty ?? false)
         ? user!.displayName!
         : 'Без імені';
     return AppCard(
       child: Column(
         children: [
-          UserAvatar(photoUrl: user?.photoURL, size: 64),
+          UserAvatar(photoUrl: user?.photoUrl, size: 64),
           const SizedBox(height: 12),
           Text(name,
               textAlign: TextAlign.center,
@@ -275,7 +284,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildPhotoCard() {
+  Widget _buildPhotoCard(ProfileState state) {
+    final saving = state.isBusyWith(ProfileOperation.savingPhoto);
+    final error = state.errorFor(ProfileOperation.savingPhoto);
     return AppCard(
       child: Form(
         key: _photoKey,
@@ -296,7 +307,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 for (final url in kAvatarPresets)
                   InkWell(
                     customBorder: const CircleBorder(),
-                    onTap: _savingPhoto
+                    onTap: saving
                         ? null
                         : () => setState(() => _photoUrl.text = url),
                     child: Container(
@@ -321,7 +332,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               hint: 'https://…',
               controller: _photoUrl,
               keyboardType: TextInputType.url,
-              enabled: !_savingPhoto,
+              enabled: !saving,
               validator: Validators.httpsUrl,
               onChanged: (_) => setState(() {}), // оновлює попередній перегляд
             ),
@@ -336,15 +347,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ],
               ),
             ],
-            if (_photoError != null) ...[
+            if (error != null) ...[
               const SizedBox(height: 12),
-              StatusBanner(_photoError!),
+              StatusBanner(error),
             ],
             const SizedBox(height: 16),
             PrimaryButton(
               label: 'Застосувати фото',
               fullWidth: false,
-              isLoading: _savingPhoto,
+              isLoading: saving,
               onPressed: _savePhoto,
             ),
           ],
@@ -353,7 +364,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildPersonalCard() {
+  Widget _buildPersonalCard(ProfileState state) {
+    final saving = state.isBusyWith(ProfileOperation.savingName);
+    final error = state.errorFor(ProfileOperation.savingName);
     return AppCard(
       child: Form(
         key: _nameKey,
@@ -362,14 +375,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           children: [
             const Text('Особисті дані', style: _title),
             const SizedBox(height: 16),
-            if (_nameError != null) ...[
-              StatusBanner(_nameError!),
+            if (error != null) ...[
+              StatusBanner(error),
               const SizedBox(height: 14),
             ],
             AppTextField(
               label: 'Ім’я',
               controller: _name,
-              enabled: !_savingName,
+              enabled: !saving,
               textInputAction: TextInputAction.done,
               validator: Validators.name,
               onFieldSubmitted: (_) => _saveName(),
@@ -385,7 +398,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             PrimaryButton(
               label: 'Зберегти',
               fullWidth: false,
-              isLoading: _savingName,
+              isLoading: saving,
               onPressed: _saveName,
             ),
           ],
@@ -394,9 +407,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildProvidersCard() {
-    final hasPassword = _repo.hasPasswordProvider;
-    final hasGoogle = _repo.hasGoogleProvider;
+  Widget _buildProvidersCard(ProfileState state) {
+    final hasPassword = state.profile?.hasPasswordProvider ?? false;
+    final hasGoogle = state.profile?.hasGoogleProvider ?? false;
+    final linking = state.isBusyWith(ProfileOperation.linkingGoogle);
+    final linkError = state.errorFor(ProfileOperation.linkingGoogle);
     Widget row(String label, bool on) => Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Row(
@@ -417,15 +432,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const SizedBox(height: 14),
           row('Електронна пошта та пароль', hasPassword),
           row('Google', hasGoogle),
-          if (_linkError != null) ...[
+          if (linkError != null) ...[
             const SizedBox(height: 4),
-            StatusBanner(_linkError!),
+            StatusBanner(linkError),
           ],
           if (!hasGoogle) ...[
             const SizedBox(height: 8),
             OutlineAppButton(
-              label: _linking ? 'Підключення…' : 'Підключити Google',
-              onPressed: _linking ? null : _linkGoogle,
+              label: linking ? 'Підключення…' : 'Підключити Google',
+              onPressed: linking ? null : _linkGoogle,
             ),
           ],
         ],
@@ -433,8 +448,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildPasswordCard() {
-    if (!_repo.hasPasswordProvider) {
+  Widget _buildPasswordCard(ProfileState state) {
+    final changing = state.isBusyWith(ProfileOperation.changingPassword);
+    final error = state.errorFor(ProfileOperation.changingPassword);
+    if (!(state.profile?.hasPasswordProvider ?? false)) {
       return const AppCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -458,9 +475,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           children: [
             const Text('Зміна пароля', style: _title),
             const SizedBox(height: 16),
-            if (_passwordError != null) ...[
-              StatusBanner(_passwordError!),
-              if (_needRelogin) ...[
+            if (error != null) ...[
+              StatusBanner(error),
+              if (state.needRelogin) ...[
                 const SizedBox(height: 8),
                 AppLink('Вийти та увійти знову', onTap: _logout),
               ],
@@ -471,7 +488,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               hint: '••••••••',
               controller: _current,
               obscureText: true,
-              enabled: !_changingPassword,
+              enabled: !changing,
               textInputAction: TextInputAction.next,
               validator: Validators.passwordRequired,
             ),
@@ -481,7 +498,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               hint: 'Мінімум 6 символів',
               controller: _new,
               obscureText: true,
-              enabled: !_changingPassword,
+              enabled: !changing,
               textInputAction: TextInputAction.next,
               validator: (v) =>
                   Validators.newPassword(v) ??
@@ -494,7 +511,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               hint: 'Повторіть пароль',
               controller: _confirm,
               obscureText: true,
-              enabled: !_changingPassword,
+              enabled: !changing,
               textInputAction: TextInputAction.done,
               validator: Validators.confirmPassword(() => _new.text),
               onFieldSubmitted: (_) => _changePassword(),
@@ -503,7 +520,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             PrimaryButton(
               label: 'Змінити пароль',
               fullWidth: false,
-              isLoading: _changingPassword,
+              isLoading: changing,
               onPressed: _changePassword,
             ),
           ],

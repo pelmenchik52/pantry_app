@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/services/analytics_service.dart';
 import '../../core/theme/app_colors.dart';
@@ -7,8 +8,7 @@ import '../../core/widgets/app_buttons.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/auth_scaffold.dart';
 import '../../core/widgets/status_banner.dart';
-import 'data/auth_failure.dart';
-import 'data/auth_repository.dart';
+import 'bloc/auth_bloc.dart';
 import 'email_sent_screen.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
@@ -21,47 +21,44 @@ class ForgotPasswordScreen extends StatefulWidget {
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
-  final _repo = AuthRepository.instance;
-
-  bool _loading = false;
-  String? _error;
+  late final AuthBloc _authBloc;
 
   @override
   void initState() {
     super.initState();
+    _authBloc = context.read<AuthBloc>()..add(const AuthFeedbackCleared());
     AnalyticsService.instance.logScreen('forgot_password');
   }
 
   @override
   void dispose() {
+    _authBloc.add(const AuthFeedbackCleared());
     _email.dispose();
     super.dispose();
   }
 
-  Future<void> _send() async {
-    if (_loading) return;
+  void _send() {
+    if (_authBloc.state.isBusy) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
-
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      await _repo.sendPasswordResetEmail(email: _email.text);
-      await AnalyticsService.instance.logEvent('password_reset_requested');
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(builder: (_) => const EmailSentScreen()),
-      );
-    } on AuthFailure catch (e) {
-      if (mounted) setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+    _authBloc.add(AuthPasswordResetRequested(_email.text));
   }
 
   @override
   Widget build(BuildContext context) {
+    // Лист надіслано → показуємо екран підтвердження.
+    return BlocListener<AuthBloc, AuthState>(
+      listenWhen: (prev, curr) => !prev.resetEmailSent && curr.resetEmailSent,
+      listener: (context, state) => Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(builder: (_) => const EmailSentScreen()),
+      ),
+      child: BlocBuilder<AuthBloc, AuthState>(
+        builder: (context, auth) => _buildForm(context, auth),
+      ),
+    );
+  }
+
+  Widget _buildForm(BuildContext context, AuthState auth) {
+    final loading = auth.operation == AuthOperation.passwordReset;
     return AuthScaffold(
       child: Form(
         key: _formKey,
@@ -76,8 +73,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               style: TextStyle(fontSize: 11, color: AppColors.muted, height: 1.5),
             ),
             const SizedBox(height: 14),
-            if (_error != null) ...[
-              StatusBanner(_error!),
+            if (auth.error != null) ...[
+              StatusBanner(auth.error!),
               const SizedBox(height: 14),
             ],
             AppTextField(
@@ -86,14 +83,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               controller: _email,
               keyboardType: TextInputType.emailAddress,
               textInputAction: TextInputAction.done,
-              enabled: !_loading,
+              enabled: !loading,
               validator: Validators.email,
               onFieldSubmitted: (_) => _send(),
             ),
             const SizedBox(height: 14),
             PrimaryButton(
               label: 'Надіслати посилання',
-              isLoading: _loading,
+              isLoading: loading,
               onPressed: _send,
             ),
             const SizedBox(height: 14),
